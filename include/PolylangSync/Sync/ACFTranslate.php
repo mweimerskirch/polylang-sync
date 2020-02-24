@@ -24,7 +24,7 @@ class ACFTranslate extends Core\Singleton {
 
 		$this->core	= Core\Core::instance();
 
-		add_action( 'acf/init' , array( $this , 'init' ), 9 );
+		add_action( 'init', array( $this , 'init' ), 9 );
 		add_filter( "acf/prepare_field", array( $this, 'prepare_field' ) );
 		add_filter( "acf/format_value", array( $this, 'pll__' ), 10, 3 );
 		//	add_filter( "acf/update_value", array( $this, 'update_value'), 10, 3 );
