@@ -26,7 +26,7 @@ class ACF extends Core\Singleton {
 
 		$this->core	= Core\Core::instance();
 
-		add_action( 'init' , array( $this, 'init' ) );
+        add_filter( "acf/prepare_field", array( $this, 'prepare_field' ) );
 
 //		add_action( 'save_post' ,  array( &$this , 'save_post' ) , 20 , 3 );
 		add_action( 'pll_save_post' ,  array( $this, 'pll_save_post' ) , 20 , 3 );
@@ -122,10 +122,21 @@ class ACF extends Core\Singleton {
 		));
 	}
 
-	public function all_fields() {
+	public function all_fields($post_id = 0) {
 		if ( is_null( $this->all_fields ) ) {
+			$filter = array();
+			
+			if ( $post_id ) {
+				$post  = get_post( $post_id );
+				
+				$filter['post_id'] = $post->ID;
+				$filter['post_type'] = $post->post_type;
+			}
+
 			$this->all_fields = array();
-			$groups = acf_get_field_groups();
+
+			$groups = acf_get_field_groups($filter);
+
 			foreach ( $groups as $group ) {
 				$this->add_sub_fields( acf_get_fields( $group['key'] ) );
 			}
@@ -150,22 +161,17 @@ class ACF extends Core\Singleton {
 	/**
 	 *	@action init
 	 */
-	public function init() {
+	public function init($post_id = null) {
 
 		// get top level fields to sync
 		$this->sync_acf_fields = array();
 
-		$all_acf_fields = $this->all_fields();
+		$all_acf_fields = $this->all_fields($post_id);
 
 		foreach( $all_acf_fields as $field ) {
-
 			if ( isset( $field['polylang_sync'] ) && $field['polylang_sync'] ) {
 				if ( ! $this->is_sub_field( $field ) ) {
-					add_filter( "acf/prepare_field/key={$field['key']}", array( $this, 'prepare_field' ) );
 					$this->sync_acf_fields[] = $field;
-				}
-				if ( $field['type'] === 'repeater' ) {
-				//	add_filter( "acf/update_value/key={$field['key']}", array( $this, 'update_repeater_value' ), 10, 3 );
 				}
 			}
 		}
@@ -191,8 +197,12 @@ class ACF extends Core\Singleton {
 	 *	@filter  "acf/prepare_field/key={$field['key']}"
 	 */
 	public function prepare_field( $field ) {
-		//
-		$field['wrapper']['class'] .= ' pll-sync';
+		if ( isset( $field['polylang_sync'] ) && $field['polylang_sync'] ) {
+			if ( ! $this->is_sub_field( $field ) ) {
+				$field['wrapper']['class'] .= ' pll-sync';
+			}
+		}
+
 		return $field;
 	}
 
@@ -202,6 +212,7 @@ class ACF extends Core\Singleton {
 	public function pll_save_post( $source_post_id, $source_post, $translation_group ) {
 
 		do_action( 'pll_sync_begin_sync_acf' );
+		$this->init($source_post_id);
 		$this->update_fields( $this->sync_acf_fields, $source_post_id, $translation_group );
 		do_action( 'pll_sync_end_sync_acf' );
 		// exec only once!

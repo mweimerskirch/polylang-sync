@@ -24,8 +24,10 @@ class ACFTranslate extends Core\Singleton {
 
 		$this->core	= Core\Core::instance();
 
-
-		add_action( 'init' , array( $this , 'init' ), 9 );
+		add_action( 'acf/init' , array( $this , 'init' ), 9 );
+		add_filter( "acf/prepare_field", array( $this, 'prepare_field' ) );
+		add_filter( "acf/format_value", array( $this, 'pll__' ), 10, 3 );
+		//	add_filter( "acf/update_value", array( $this, 'update_value'), 10, 3 );
 
 		foreach ( $this->get_supported_fields() as $type ) {
 			add_action( "acf/render_field_settings/type={$type}", array( $this, 'render_acf_settings' ) );
@@ -65,14 +67,12 @@ class ACFTranslate extends Core\Singleton {
 
 		global $wpdb;
 
-		if ( ! function_exists( 'PLL' ) )
-			return; // Bail if PolyLang is not enabled (yet).
-
 		// get top level fields to sync
 		$this->translated_acf_fields = [];
 
 		// get all fields
-		$all_acf_fields	= ACF::instance()->all_fields();
+		$post_id = isset($_REQUEST['post']) ? intval($_REQUEST['post']) : null; // FIXME
+		$all_acf_fields	= ACF::instance()->all_fields($post_id);
 
 		$default_lang = PLL()->model->get_language( PLL()->options['default_lang'] );
 		$field_keys		= array();
@@ -81,10 +81,6 @@ class ACFTranslate extends Core\Singleton {
 		// Gather translated fields
 		foreach( $all_acf_fields as $field ) {
 			if ( isset( $field['polylang_translate'] ) && $field['polylang_translate'] ) {
-				add_filter( "acf/prepare_field/key={$field['key']}", array( $this, 'prepare_field' ) );
-				add_filter( "acf/format_value/key={$field['key']}", 'pll__' );
-			//	add_filter( "acf/update_value/key={$field['key']}", array( $this, 'update_value'), 10, 3 );
-
 				$this->translated_acf_fields[] = $field;
 				$field_keys[ $field['key'] ] = $field;
 
@@ -132,28 +128,38 @@ class ACFTranslate extends Core\Singleton {
 	 */
 	public function prepare_field( $field ) {
 
-		if ( ($post = get_post()) && current_user_can( get_option( 'polylang_sync_strings_capability' ) ) ) {
-			$lang = pll_get_post_language( $post->ID );
-			$lang_obj = PLL()->model->get_language( $lang );
-			$mo = $this->get_pll_mo( $lang );
+		if ( isset( $field['polylang_translate'] ) && $field['polylang_translate'] ) {
+			if ( ( $post = get_post() ) && current_user_can( get_option( 'polylang_sync_strings_capability' ) ) ) {
+				$lang     = pll_get_post_language( $post->ID );
+				$lang_obj = PLL()->model->get_language( $lang );
+				$mo       = $this->get_pll_mo( $lang );
 
-			$field_group = $this->get_field_group($field['parent']);
-			$admin_url = add_query_arg(array(
-				'page'	=> 'mlang_strings',
-				'group'	=> rawurlencode($field_group['title'] )
-			), admin_url('admin.php') );
+				$field_group = $this->get_field_group( $field['parent'] );
+				$admin_url   = add_query_arg( array(
+					'page'  => 'mlang_strings',
+					'group' => rawurlencode( $field_group['title'] )
+				), admin_url( 'admin.php' ) );
 
-			$field['append'] = sprintf('<a title="%s" href="%s">%s %s</a>',
-				__('Edit Translation','polylang-sync'),
-				$admin_url,
-				$lang_obj->flag,
-				$mo->translate( $field['value'] )
-			);
+				$field['append'] = sprintf( '<a title="%s" href="%s">%s %s</a>',
+					__( 'Edit Translation', 'polylang-sync' ),
+					$admin_url,
+					$lang_obj->flag,
+					$mo->translate( $field['value'] )
+				);
+			}
+			$field['wrapper']['class'] .= ' pll-sync-translated';
 		}
-		$field['wrapper']['class'] .= ' pll-sync-translated';
+
 		return $field;
 	}
 
+	public function pll__ ( $value, $post_id, $field ) {
+		if ( isset( $field['polylang_translate'] ) && $field['polylang_translate'] ) {
+			$value = \pll__($value);
+		}
+
+		return $value;
+	}
 
 	/**
 	 *	Write field value as translation to pll_mo
@@ -161,34 +167,37 @@ class ACFTranslate extends Core\Singleton {
 	 *	@filter  "acf/update_value/key={$field['key']}"
 	 */
 	public function update_value( $value, $post_id, $field ) {
+		if ( isset( $field['polylang_translate'] ) && $field['polylang_translate'] ) {
 
-		// only update if no sync in progress
-		if ( did_action( 'pll_sync_begin_sync_acf' ) && ! did_action( 'pll_sync_end_sync_acf' ) ) {
-			return $value;
-		}
-
-		if ( $post = get_post( $post_id ) ) {
-			$lang = pll_get_post_language( $post->ID );
-			$default_lang = PLL()->options['default_lang'];
-			$mo = $this->get_pll_mo( $lang );
-			// get default
-			$orig_post = pll_get_post( $post_id, $default_lang );
-			$orig = get_field( $field['name'], $orig_post );
-			error_log('-----------');
-			error_log($lang);
-			error_log($default_lang);
-			error_log($post_id);
-			error_log($orig_post);
-			error_log($orig);
-			error_log($value);
-			if ( ! empty( $orig ) && ! empty( $value ) ) {
-				$mo->add_entry( $mo->make_entry( $orig, $value ) );
-				$mo->export_to_db( PLL()->model->get_language( $lang ) );
-				error_log('--- save mo ----');
+			// only update if no sync in progress
+			if ( did_action( 'pll_sync_begin_sync_acf' ) && ! did_action( 'pll_sync_end_sync_acf' ) ) {
+				return $value;
 			}
-			// if ( lang is default ): do nothing
-			//var_dump()
+
+			if ( $post = get_post( $post_id ) ) {
+				$lang         = pll_get_post_language( $post->ID );
+				$default_lang = PLL()->options['default_lang'];
+				$mo           = $this->get_pll_mo( $lang );
+				// get default
+				$orig_post = pll_get_post( $post_id, $default_lang );
+				$orig      = get_field( $field['name'], $orig_post );
+				error_log( '-----------' );
+				error_log( $lang );
+				error_log( $default_lang );
+				error_log( $post_id );
+				error_log( $orig_post );
+				error_log( $orig );
+				error_log( $value );
+				if ( ! empty( $orig ) && ! empty( $value ) ) {
+					$mo->add_entry( $mo->make_entry( $orig, $value ) );
+					$mo->export_to_db( PLL()->model->get_language( $lang ) );
+					error_log( '--- save mo ----' );
+				}
+				// if ( lang is default ): do nothing
+				//var_dump()
+			}
 		}
+
 		return $value;
 	}
 
